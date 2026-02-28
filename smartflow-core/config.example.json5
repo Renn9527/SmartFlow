@@ -1,0 +1,57 @@
+﻿{
+  version: "0.1.0",
+  engineMode: "win_divert",
+  proxies: [
+    {
+      id: "clash-socks",
+      name: "Clash Verge Default",
+      kind: "socks5",
+      endpoint: "127.0.0.1:7897",
+      username: null,
+      password: null,
+      enabled: true
+    }
+  ],
+  rules: [
+    {
+      id: "sample-rule-id",
+      name: "Proxy Browser",
+      enabled: true,
+      matcher: {
+        appNames: ["chrome", "msedge"],
+        exePaths: [],
+        pids: [],
+        hashes: [],
+        wildcard: null
+      },
+      proxyProfile: "clash-socks",
+      protocols: ["tcp", "udp", "dns"],
+      autoBindChildren: true,
+      forceDns: true,
+      blockIpv6: true,
+      blockDoh: true,
+      createdAt: "2026-02-28T00:00:00Z",
+      updatedAt: "2026-02-28T00:00:00Z"
+    }
+  ],
+  quickBar: [
+    {
+      id: "sample-quickbar-id",
+      name: "My App",
+      exePath: "C:\\Tools\\MyApp\\app.exe",
+      args: [],
+      workDir: "C:\\Tools\\MyApp",
+      proxyProfile: "clash-socks",
+      startMode: "start_and_bind",
+      runAsAdmin: false,
+      autoBindChildren: true
+    }
+  ],
+  runtime: {
+    enabled: false,
+    dnsEnforced: true,
+    ipv6Blocked: true,
+    dohBlocked: true,
+    logLevel: "info"
+  }
+}

@@ -1,0 +1,152 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SmartFlow</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>SmartFlow</h1>
+      <div class="header-actions">
+        <span id="healthBadge" class="badge">检测中...</span>
+        <button id="themeToggleBtn" class="secondary" type="button" title="切换深色模式">深色模式</button>
+        <button id="refreshBtn">刷新</button>
+      </div>
+    </header>
+
+    <aside class="quick-launch-rail" aria-label="一键启动栏">
+      <div id="quickLaunchIcons" class="quick-launch-icons"></div>
+      <button id="quickLaunchAddBtn" class="quick-launch-add" type="button" title="新增启动图标">+</button>
+    </aside>
+
+    <main>
+      <section id="runtimeCard" class="card">
+        <h2>运行状态</h2>
+        <div class="grid two">
+          <label>
+            引擎模式
+            <select id="engineMode">
+              <option value="win_divert">WinDivert</option>
+              <option value="wfp">WFP</option>
+              <option value="api_hook">API Hook</option>
+            </select>
+          </label>
+          <label>
+            Clash SOCKS5 端口
+            <input id="clashEndpoint" placeholder="127.0.0.1:7897" />
+          </label>
+        </div>
+        <div class="switches">
+          <label><input type="checkbox" id="runtimeEnabled" /> 启用 SmartFlow</label>
+          <label><input type="checkbox" id="dnsEnforced" /> DNS 强制代理</label>
+          <label><input type="checkbox" id="ipv6Blocked" /> IPv6 防泄漏</label>
+          <label><input type="checkbox" id="dohBlocked" /> DoH 防泄漏</label>
+        </div>
+        <button id="saveRuntimeBtn">保存运行配置</button>
+      </section>
+
+      <section id="proxyCard" class="card">
+        <h2>代理配置</h2>
+        <form id="proxyForm" class="grid three">
+          <input id="proxyName" placeholder="名称" required />
+          <select id="proxyKind">
+            <option value="socks5">SOCKS5</option>
+            <option value="http">HTTP</option>
+            <option value="direct">DIRECT</option>
+          </select>
+          <input id="proxyEndpoint" placeholder="127.0.0.1:7897" required />
+          <button type="submit">添加代理</button>
+        </form>
+        <div class="table-wrap">
+          <table id="proxyTable">
+            <thead>
+              <tr><th>名称</th><th>类型</th><th>端点</th><th>状态</th><th>操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="ruleCard" class="card">
+        <h2>进程规则</h2>
+        <form id="ruleForm" class="grid four">
+          <input id="ruleName" placeholder="规则名" required />
+          <input id="ruleMatch" placeholder="进程名/路径关键字" required />
+          <select id="ruleProxy"></select>
+          <button type="submit">添加规则</button>
+        </form>
+        <div class="table-wrap">
+          <table id="ruleTable">
+            <thead>
+              <tr><th>规则</th><th>匹配</th><th>代理</th><th>协议</th><th>开关</th><th>操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="quickBarCard" class="card">
+        <h2>Quick Bar</h2>
+        <form id="quickBarForm" class="grid four">
+          <input id="qbName" placeholder="名称" required />
+          <input id="qbExe" placeholder="EXE 路径" required />
+          <select id="qbProxy"></select>
+          <select id="qbStartMode">
+            <option value="start_and_bind">start_and_bind</option>
+            <option value="start_only">start_only</option>
+            <option value="bind_only">bind_only</option>
+          </select>
+          <label><input type="checkbox" id="qbAdmin" /> 管理员启动</label>
+          <label><input type="checkbox" id="qbChildren" checked /> 子进程继承</label>
+          <button type="submit">添加启动项</button>
+        </form>
+        <div class="table-wrap">
+          <table id="quickBarTable">
+            <thead>
+              <tr><th>名称</th><th>EXE</th><th>代理</th><th>模式</th><th>操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card full">
+        <div class="process-header">
+          <button id="toggleProcessBtn" class="collapse-btn" type="button">在线进程</button>
+          <span id="processCount" class="collapse-meta">已收起，点击按钮展开</span>
+        </div>
+        <div id="processBody" class="process-body hidden">
+          <div class="toolbar">
+            <button id="refreshProcessBtn">刷新进程</button>
+          </div>
+          <div class="table-wrap process-wrap">
+            <table id="processTable">
+              <thead>
+                <tr><th>PID</th><th>名称</th><th>路径</th><th>操作</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="card full">
+        <h2>命中与日志</h2>
+        <div class="log-grid">
+          <div>
+            <h3>统计</h3>
+            <pre id="statsBox"></pre>
+          </div>
+          <div>
+            <h3>实时日志</h3>
+            <pre id="logBox"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,316 @@
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
+
+use std::{
+    collections::HashMap,
+    env,
+    path::PathBuf,
+    process::{Command, Stdio},
+    sync::Mutex,
+    time::Duration,
+};
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+use reqwest::StatusCode;
+use serde_json::json;
+use single_instance::SingleInstance;
+use tauri::{
+    CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
+    SystemTrayMenuItem, WindowEvent,
+};
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+struct RuntimeState {
+    core_url: String,
+    enabled: Mutex<bool>,
+    icon_cache: Mutex<HashMap<String, String>>,
+}
+
+#[tauri::command]
+fn get_core_url(state: State<'_, RuntimeState>) -> String {
+    state.core_url.clone()
+}
+
+#[tauri::command]
+fn get_runtime_enabled(state: State<'_, RuntimeState>) -> bool {
+    *state.enabled.lock().expect("runtime mutex poisoned")
+}
+
+#[tauri::command]
+fn set_runtime_enabled(enabled: bool, state: State<'_, RuntimeState>) -> Result<(), String> {
+    post_runtime_toggle(&state.core_url, enabled).map_err(|error| error.to_string())?;
+    *state.enabled.lock().map_err(|_| "runtime mutex poisoned")? = enabled;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_exe_icon_data_url(exe_path: String, state: State<'_, RuntimeState>) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let normalized_path = exe_path.trim();
+        if normalized_path.is_empty() {
+            return Err("exe path is empty".to_string());
+        }
+
+        if let Ok(cache) = state.icon_cache.lock() {
+            if let Some(icon) = cache.get(normalized_path) {
+                return Ok(icon.clone());
+            }
+        }
+
+        let script = r#"
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Drawing
+$p=$env:SMARTFLOW_ICON_PATH
+if ([string]::IsNullOrWhiteSpace($p)) { throw 'empty exe path' }
+if (!(Test-Path -LiteralPath $p)) { throw 'exe path not found' }
+$icon=[System.Drawing.Icon]::ExtractAssociatedIcon($p)
+if ($null -eq $icon) { throw 'icon not found' }
+$bmp=$icon.ToBitmap()
+$ms=New-Object System.IO.MemoryStream
+try {
+  $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+  [Convert]::ToBase64String($ms.ToArray())
+} finally {
+  $ms.Dispose()
+  $bmp.Dispose()
+  $icon.Dispose()
+}
+"#;
+
+        let mut command = Command::new("powershell");
+        command
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(script)
+            .env("SMARTFLOW_ICON_PATH", normalized_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null());
+
+        #[cfg(target_os = "windows")]
+        {
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = command
+            .output()
+            .map_err(|error| format!("failed to resolve icon: {error}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("icon extract failed: {}", stderr.trim()));
+        }
+
+        let icon_base64 = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if icon_base64.is_empty() {
+            return Err("icon extract returned empty output".to_string());
+        }
+
+        let data_url = format!("data:image/png;base64,{icon_base64}");
+
+        if let Ok(mut cache) = state.icon_cache.lock() {
+            cache.insert(normalized_path.to_string(), data_url.clone());
+        }
+
+        Ok(data_url)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = exe_path;
+        let _ = state;
+        Err("exe icon is only supported on Windows".to_string())
+    }
+}
+
+fn post_runtime_toggle(core_url: &str, enabled: bool) -> anyhow::Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()?;
+
+    let response = client
+        .post(format!("{core_url}/runtime"))
+        .json(&json!({ "enabled": enabled }))
+        .send()?;
+
+    if response.status() != StatusCode::OK {
+        anyhow::bail!("core runtime API failed: {}", response.status());
+    }
+
+    Ok(())
+}
+
+fn check_core_health(core_url: &str) -> bool {
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(800))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+
+    match client.get(format!("{core_url}/health")).send() {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+fn spawn_core_if_needed(core_url: &str) {
+    if check_core_health(core_url) {
+        return;
+    }
+
+    let exe = match env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("failed to resolve current exe: {error}");
+            return;
+        }
+    };
+
+    let base_dir = match exe.parent() {
+        Some(path) => path.to_path_buf(),
+        None => {
+            eprintln!("failed to resolve exe directory");
+            return;
+        }
+    };
+
+    let core_candidates = [
+        base_dir.join("smartflow-core.exe"),
+        base_dir.join("smartflow-core"),
+        PathBuf::from("smartflow-core.exe"),
+    ];
+
+    let Some(core_path) = core_candidates.iter().find(|path| path.exists()) else {
+        eprintln!("smartflow-core executable not found near ui binary");
+        return;
+    };
+
+    let bind = core_url
+        .strip_prefix("http://")
+        .or_else(|| core_url.strip_prefix("https://"))
+        .unwrap_or("127.0.0.1:46666");
+
+    let mut command = Command::new(core_path);
+    command
+        .arg("--bind")
+        .arg(bind)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    if let Err(error) = command.spawn() {
+        eprintln!("failed to spawn smartflow-core: {error}");
+    }
+}
+
+fn main() {
+    let single_instance = match SingleInstance::new("smartflow-ui-main-instance") {
+        Ok(instance) => instance,
+        Err(error) => {
+            eprintln!("failed to initialize single-instance guard: {error}");
+            return;
+        }
+    };
+
+    if !single_instance.is_single() {
+        return;
+    }
+
+    let core_url =
+        env::var("SMARTFLOW_CORE_URL").unwrap_or_else(|_| "http://127.0.0.1:46666".to_string());
+
+    let open_item = CustomMenuItem::new("open", "打开面板");
+    let toggle_item = CustomMenuItem::new("toggle", "暂停 SmartFlow");
+    let quit_item = CustomMenuItem::new("quit", "退出");
+
+    let tray_menu = SystemTrayMenu::new()
+        .add_item(open_item)
+        .add_item(toggle_item)
+        .add_native_item(SystemTrayMenuItem::Separator)
+        .add_item(quit_item);
+
+    let runtime_state = RuntimeState {
+        core_url: core_url.clone(),
+        enabled: Mutex::new(true),
+        icon_cache: Mutex::new(HashMap::new()),
+    };
+
+    tauri::Builder::default()
+        .manage(runtime_state)
+        .invoke_handler(tauri::generate_handler![
+            get_core_url,
+            get_runtime_enabled,
+            set_runtime_enabled,
+            get_exe_icon_data_url
+        ])
+        .setup(move |_| {
+            spawn_core_if_needed(&core_url);
+            Ok(())
+        })
+        .system_tray(SystemTray::new().with_menu(tray_menu))
+        .on_window_event(|event| {
+            if let WindowEvent::CloseRequested { api, .. } = event.event() {
+                api.prevent_close();
+                if let Err(error) = event.window().hide() {
+                    eprintln!("failed to hide window: {error}");
+                }
+            }
+        })
+        .on_system_tray_event(|app, event| {
+            if let SystemTrayEvent::MenuItemClick { id, .. } = event {
+                match id.as_str() {
+                    "open" => {
+                        if let Some(window) = app.get_window("main") {
+                            if let Err(error) = window.show() {
+                                eprintln!("failed to show window: {error}");
+                            }
+                            if let Err(error) = window.set_focus() {
+                                eprintln!("failed to focus window: {error}");
+                            }
+                        }
+                    }
+                    "toggle" => {
+                        let state = app.state::<RuntimeState>();
+                        let mut lock = match state.enabled.lock() {
+                            Ok(lock) => lock,
+                            Err(_) => return,
+                        };
+
+                        let next = !*lock;
+                        if post_runtime_toggle(&state.core_url, next).is_ok() {
+                            *lock = next;
+                            let title = if next {
+                                "暂停 SmartFlow"
+                            } else {
+                                "恢复 SmartFlow"
+                            };
+                            let _ = app.tray_handle().get_item("toggle").set_title(title);
+                        }
+                    }
+                    "quit" => {
+                        std::process::exit(0);
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .run(tauri::generate_context!())
+        .expect("failed to run SmartFlow UI");
+}

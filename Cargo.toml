@@ -1,0 +1,11 @@
+[workspace]
+members = [
+  "smartflow-core",
+  "smartflow-ui/src-tauri"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["SmartFlow Team"]
